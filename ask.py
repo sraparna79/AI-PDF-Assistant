@@ -49,75 +49,71 @@ if uploaded is not None:
 st.divider()
 st.title("❓ Ask a question about your PDF")
 
-def search_pdf(question: str, top_k: int = 5) -> Dict:  # ← FIXED: Proper indentation
+def search_pdf(question: str, top_k: int = 5) -> Dict:
     if not st.session_state.chunks:
         return {"answer": "", "sources": [], "matches": 0}
     
     best_chunks = []
+    query_lower = question.lower()
+    
     for i, chunk in enumerate(st.session_state.chunks):
+        chunk_lower = chunk.lower()
+        
+        # 🔧 MULTIPLE SCORING METHODS (much more lenient)
+        keyword_score = 0
         query_words = set(question.lower().split())
         chunk_words = set(chunk.lower().split())
-        score = len(query_words.intersection(chunk_words))
-        if score > 0:
-            best_chunks.append((chunk, score, i))
+        keyword_score = len(query_words.intersection(chunk_words))
+        
+        # Fuzzy matching (catches similar words)
+        fuzzy_score = sum(1 for word in query_words if word in chunk_lower) * 2
+        
+        # Substring matching (catches phrases)
+        substring_score = sum(1 for word in question.lower().split() if word in chunk_lower) * 1.5
+        
+        # Total score
+        total_score = keyword_score + fuzzy_score + substring_score
+        
+        # Much lower threshold!
+        if total_score > 0.5:  
+            best_chunks.append((chunk, total_score, i))
     
+    # Always return top chunks even with low scores
     if not best_chunks:
-        return {"answer": "", "sources": [], "matches": 0}
+        # Fallback: return top 3 chunks by length/position
+        fallback_chunks = sorted(enumerate(st.session_state.chunks), 
+                               key=lambda x: len(x[1]), reverse=True)[:3]
+        best_chunks = [(chunk, 1.0, idx) for idx, chunk in fallback_chunks]
     
     best_chunks.sort(key=lambda x: x[1], reverse=True)
     top_results = best_chunks[:top_k]
     
+    # Build answer from ALL top chunks
     answer_parts = []
     seen_sources = set()
+    
     for chunk, score, idx in top_results:
         source = st.session_state.sources[idx]["filename"]
         seen_sources.add(source)
         
-        sentences = re.split(r'[.!?]+', chunk)
-        for sent in sentences:
-            sent = sent.strip()
-            if len(sent) > 20:
-                answer_parts.append(sent.capitalize())
-                break
+        # Take first good chunk snippet
+        snippet = chunk[:300].strip()
+        if snippet:
+            answer_parts.append(snippet)
     
-    answer = " ".join(answer_parts[:3])
-    if not answer:
-        answer = f"Found {len(top_results)} relevant chunks (no complete sentences extracted)"
+    answer = " ".join(answer_parts)[:1000]  # Combine + truncate
+    if len(answer) < 50:
+        answer = f"Found relevant sections: {len(top_results)} chunks matched."
     
     return {
         "answer": answer,
         "sources": list(seen_sources),
         "matches": len(top_results)
     }
-
-# FORM - NOW PROPERLY STRUCTURED
-if st.session_state.chunks:
-    with st.form("rag_query_form", clear_on_submit=True):
-        question = st.text_input("Your question", placeholder="e.g. What is the main topic?")
-        top_k = st.number_input("Top chunks", min_value=1, max_value=10, value=4)
-        col1, col2 = st.columns(2)
-        submitted = col1.form_submit_button("🔍 Ask")
-        col2.form_submit_button("🗑️ Clear All")
-
-    if submitted and question.strip():
-        with st.spinner("🔄 Searching PDF..."):
-            output = search_pdf(question.strip(), top_k)
-
-        st.subheader("📝 Answer")
-        if output["answer"]:
-            st.markdown(f"**Q: {question}**")
-            st.write(output["answer"])
-        else:
-            st.warning("❌ No relevant content found. Try using keywords from the PDF.")
-        
-        if output["sources"]:
-            st.subheader("📚 Sources")
-            for source in output["sources"]:
-                st.caption(f"• {source}")
-        
-        st.caption(f"*Found {output['matches']} matching chunks*")
-else:
-    st.info("👆 Upload a PDF first")
-
-st.markdown("---")
-st.caption("Production RAG Pipeline - Powered by Streamlit")
+if uploaded is not None and st.session_state.chunks:
+    with st.expander("🔍 DEBUG - Check Chunks"):
+        st.write(f"**{len(st.session_state.chunks)} chunks extracted**")
+        for i, chunk in enumerate(st.session_state.chunks[:3]):
+            st.write(f"**Chunk {i+1}:** {chunk[:200]}...")
+        if st.button("Test with chunk words"):
+            st.write("Sample words:", " ".join(st.session_state.chunks[0].split()[:10]))
