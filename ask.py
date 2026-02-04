@@ -1,79 +1,24 @@
-import streamlit as st
+import asyncio
 from pathlib import Path
 import time
+
+import streamlit as st
+import inngest
 from dotenv import load_dotenv
 import os
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-
-# 🔥 SESSION STATE INITIALIZATION
-if "rag_system_ready" not in st.session_state:
-    st.session_state.rag_system_ready = False
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "documents" not in st.session_state:
-    st.session_state.documents = []
-if "vectorstore" not in st.session_state:
-    st.session_state.vectorstore = None
-if "sources" not in st.session_state:
-    st.session_state.sources = []
+import requests
 
 load_dotenv()
 
-# 🔥 YOUR PERFECT STYLING (unchanged)
-st.set_page_config(page_title="AI-PDF Assistant", page_icon="📄", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="RAG Ingest PDF", page_icon="📄", layout="centered")
 
-st.markdown("""
-<style>
-    .main {background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%); color: #e2e8f0; padding: 2rem;}
-    .stTextInput > div > div > input {background: #1e293b; color: #f8fafc; border: 2px solid #3b82f6; border-radius: 12px; padding: 14px 16px; font-size: 16px;}
-    .stButton > button {background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; border: none; border-radius: 12px; padding: 14px 28px; font-weight: 600; font-size: 15px; box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4); transition: all 0.2s ease;}
-    .stButton > button:hover {box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5); transform: translateY(-1px);}
-    .answer-card {background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 16px; padding: 24px; border-left: 4px solid #3b82f6; box-shadow: 0 10px 30px rgba(0,0,0,0.3); margin: 20px 0;}
-    .sources-card {background: #1e293b; border-radius: 12px; padding: 20px; border-left: 4px solid #10b981;}
-    .metric-container {background: linear-gradient(135deg, #3b82f6, #1d4ed8); border-radius: 12px; padding: 16px; text-align: center;}
-    .header-title {font-size: 2.5rem; font-weight: 700; background: linear-gradient(135deg, #3b82f6, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;}
-</style>
-""", unsafe_allow_html=True)
 
-# YOUR PERFECT HEADER (unchanged)
-st.markdown("""
-<div style='text-align: center; padding: 3rem 2rem; background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 20px; margin-bottom: 2rem; box-shadow: 0 20px 40px rgba(0,0,0,0.3); border: 1px solid #475569;'>
-    <div style='font-size: 3.5rem; margin-bottom: 1rem;'>📄🧠</div>
-    <h1 class='header-title'>AI-PDF Assistant</h1>
-    <p style='font-size: 1.2rem; color: #94a3b8; margin: 0;'>Intelligent Document Analysis • Production RAG Pipeline</p>
-</div>
-""", unsafe_allow_html=True)
+@st.cache_resource
+def get_inngest_client() -> inngest.Inngest:
+    return inngest.Inngest(app_id="rag_app", is_production=False)
 
-# 🔥 VECTOR STORE CLASS (Your enhanced version - perfect!)
-class MockVectorStore:
-    def __init__(self):
-        self.embeddings = []
-        self.documents = []
-        self.metadata = []
-    
-    def add_documents(self, documents, metadata):
-        for doc, meta in zip(documents, metadata):
-            embedding = np.random.normal(0, 0.1, 768).tolist()
-            self.embeddings.append(embedding)
-            self.documents.append(doc)
-            self.metadata.append(meta)
-    
-    def similarity_search(self, query, k=5):
-        if not self.embeddings:
-            return []
-        query_emb = np.random.normal(0, 0.1, 768).reshape(1, -1)
-        doc_embs = np.array(self.embeddings)
-        similarities = cosine_similarity(query_emb, doc_embs)[0]
-        top_k_indices = np.argsort(similarities)[-k:][::-1]
-        return [{"document": self.documents[i], "metadata": self.metadata[i], "score": float(similarities[i])} for i in top_k_indices]
 
-# Initialize vectorstore
-if st.session_state.vectorstore is None:
-    st.session_state.vectorstore = MockVectorStore()
-
-# 🔥 MISSING FUNCTIONS
-def save_uploaded_pdf(file):
+def save_uploaded_pdf(file) -> Path:
     uploads_dir = Path("uploads")
     uploads_dir.mkdir(parents=True, exist_ok=True)
     file_path = uploads_dir / file.name
@@ -81,126 +26,100 @@ def save_uploaded_pdf(file):
     file_path.write_bytes(file_bytes)
     return file_path
 
-def chunk_text(text, chunk_size=500, overlap=50):
-    words = text.split()
-    chunks = []
-    for i in range(0, len(words), chunk_size - overlap):
-        chunk = ' '.join(words[i:i + chunk_size])
-        chunks.append(chunk)
-    return chunks
 
-def process_pdf_content(file_path):
-    filename = file_path.name.replace('.pdf', '')
-    if 'python' in filename.lower():
-        raw_content = "Python is a high-level, interpreted programming language known for its readability and simplicity. Python supports multiple programming paradigms including procedural, object-oriented, and functional programming. Widely used in web development (Django, Flask), data science (Pandas, NumPy), AI/ML (TensorFlow, PyTorch), and automation."
-    else:
-        raw_content = f"Document '{filename}' contains comprehensive technical content across multiple domains. Key topics include programming concepts, data structures, algorithms, and practical implementations."
-    return chunk_text(raw_content)
-
-def rag_pipeline(question, vectorstore, top_k=5):
-    if not vectorstore.documents:
-        return "No documents loaded.", []
-    
-    relevant_docs = vectorstore.similarity_search(question, top_k)
-    
-    answer = f"**{question}**"
-    
-    for doc in relevant_docs[:3]:
-        sentences = [s.strip() for s in doc["document"].split('.') if len(s.strip()) > 20]
-        for sentence in sentences[:2]:
-            answer += f"\n• {sentence.capitalize()}"
-    
-    answer += f"\n\n*Source: {doc['metadata']['source']}*"
-    return answer, relevant_docs
+async def send_rag_ingest_event(pdf_path: Path) -> None:
+    client = get_inngest_client()
+    await client.send(
+        inngest.Event(
+            name="rag/ingest_pdf",
+            data={
+                "pdf_path": str(pdf_path.resolve()),
+                "source_id": pdf_path.name,
+            },
+        )
+    )
 
 
+st.title("Upload a PDF to Ingest")
+uploaded = st.file_uploader("Choose a PDF", type=["pdf"], accept_multiple_files=False)
 
-
-# 📊 STATUS DASHBOARD
-col1, col2, col3 = st.columns(3)
-with col1: st.metric("📄 Documents", len(st.session_state.documents) if st.session_state.documents else 0)
-with col2: st.metric("💬 Conversations", len(st.session_state.chat_history)//2)
-with col3: st.metric("RAG Status", "✅ Active" if st.session_state.rag_system_ready else "⚠️ Upload Docs")
+if uploaded is not None:
+    with st.spinner("Uploading and triggering ingestion..."):
+        path = save_uploaded_pdf(uploaded)
+        # Kick off the event and block until the send completes
+        asyncio.run(send_rag_ingest_event(path))
+        # Small pause for user feedback continuity
+        time.sleep(0.3)
+    st.success(f"Triggered ingestion for: {path.name}")
+    st.caption("You can upload another PDF if you like.")
 
 st.divider()
+st.title("Ask a question about your PDFs")
 
-# 🔥 FIXED UPLOAD SECTION (Main fix!)
-st.markdown("### 📤 Document Upload")
-col1, col2 = st.columns([3, 1])
 
-# ✅ PROPER SCOPING - Define uploaded in MAIN scope
-uploaded_file = st.session_state.get("uploaded_file", None)
+async def send_rag_query_event(question: str, top_k: int) -> None:
+    client = get_inngest_client()
+    result = await client.send(
+        inngest.Event(
+            name="rag/query_pdf_ai",
+            data={
+                "question": question,
+                "top_k": top_k,
+            },
+        )
+    )
 
-if not st.session_state.rag_system_ready:
-    with col1:
-        uploaded_file = st.file_uploader("Upload PDF documents for analysis", type=["pdf"], label_visibility="collapsed")
-    with col2:
-        st.info("**Status:** Upload to begin")
-    
-    st.session_state.uploaded_file = uploaded_file  # Store in session
-    
-    # 🔥 PROCESS UPLOAD (Now safe!)
-    if uploaded_file is not None and not st.session_state.rag_system_ready:
-        with st.spinner("🔄 Processing with vector embeddings..."):
-            path = save_uploaded_pdf(uploaded_file)
-            chunks = process_pdf_content(path)
-            metadata = [{"source": path.name, "page": i+1} for i in range(len(chunks))]
-            st.session_state.vectorstore.add_documents(chunks, metadata)
-            st.session_state.documents = chunks
-            st.session_state.sources = [path.name]
-            st.session_state.rag_system_ready = True
-            st.session_state.uploaded_file = None
-        st.success(f"✅ **{path.name}** processed!")
-        st.rerun()
-else:
-    with col2:
-        st.info(f"✅ **Ready** - {st.session_state.sources[0] if st.session_state.sources else 'N/A'}")
+    return result[0]
 
-st.divider()
 
-# ❓ QUERY SECTION - FULLY FIXED
-st.markdown("### ❓ Intelligent Query")
-st.info("Ask questions about your uploaded documents.")
+def _inngest_api_base() -> str:
+    # Local dev server default; configurable via env
+    return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
 
-# Chat history
-if st.session_state.chat_history:
-    for msg in st.session_state.chat_history[-4:]:
-        role = "👤 Q" if msg["role"] == "user" else "🤖 A"
-        st.markdown(f"**{role}:** {msg['content'][:250]}...")
 
-# 🔥 FIXED FORM - Variables in MAIN scope
-question = st.text_input(
-    "Ask about your PDF:", 
-    placeholder="e.g. What is Python used for?",
-    label_visibility="collapsed"
-)
+def fetch_runs(event_id: str) -> list[dict]:
+    url = f"{_inngest_api_base()}/events/{event_id}/runs"
+    resp = requests.get(url)
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("data", [])
 
-top_k = st.slider("Context depth", 1, 10, 3)
 
-# ✅ Button in MAIN scope = submitted works!
-if st.button("🔍 Analyze PDF", type="primary", use_container_width=True) and question.strip():
-    if st.session_state.rag_system_ready:
-        with st.spinner("Searching PDF..."):
-            response, relevant_docs = rag_pipeline(question, st.session_state.vectorstore)
-            
-            st.session_state.chat_history.append({"role": "user", "content": question})
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
-        
-        # ✅ SAFE DISPLAY
-        st.markdown(f"""
-        <div class='answer-card'>
-            <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 20px;'>
-                <span style='font-size: 1.8rem;'>📄</span>
-                <h3 style='margin: 0; color: #60a5fa;'>From Your PDF</h3>
-            </div>
-            <div style='font-size: 1.1rem; line-height: 1.7; color: #e2e8f0; padding: 24px; border-radius: 12px; background: rgba(30, 41, 59, 0.5);'>
-                {response}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Source info
-        st.caption(f"Found in: {st.session_state.sources[0]}")
-    else:
-        st.warning("👆 Upload a PDF first!")
+def wait_for_run_output(event_id: str, timeout_s: float = 120.0, poll_interval_s: float = 0.5) -> dict:
+    start = time.time()
+    last_status = None
+    while True:
+        runs = fetch_runs(event_id)
+        if runs:
+            run = runs[0]
+            status = run.get("status")
+            last_status = status or last_status
+            if status in ("Completed", "Succeeded", "Success", "Finished"):
+                return run.get("output") or {}
+            if status in ("Failed", "Cancelled"):
+                raise RuntimeError(f"Function run {status}")
+        if time.time() - start > timeout_s:
+            raise TimeoutError(f"Timed out waiting for run output (last status: {last_status})")
+        time.sleep(poll_interval_s)
 
+
+with st.form("rag_query_form"):
+    question = st.text_input("Your question")
+    top_k = st.number_input("How many chunks to retrieve", min_value=1, max_value=20, value=5, step=1)
+    submitted = st.form_submit_button("Ask")
+
+    if submitted and question.strip():
+        with st.spinner("Sending event and generating answer..."):
+            # Fire-and-forget event to Inngest for observability/workflow
+            event_id = asyncio.run(send_rag_query_event(question.strip(), int(top_k)))
+            # Poll the local Inngest API for the run's output
+            output = wait_for_run_output(event_id)
+            answer = output.get("answer", "")
+            sources = output.get("sources", [])
+
+        st.subheader("Answer")
+        st.write(answer or "(No answer)")
+        if sources:
+            st.caption("Sources")
+            for s in sources:
+                st.write(f"- {s}")
