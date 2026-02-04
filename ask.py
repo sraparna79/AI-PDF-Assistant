@@ -98,57 +98,21 @@ def process_pdf_content(file_path):
     return chunk_text(raw_content)
 
 def rag_pipeline(question, vectorstore, top_k=5):
-    """Clean PDF quotes - NO markdown conflicts"""
     if not vectorstore.documents:
-        return "No documents indexed yet.", []
+        return "No documents loaded.", []
     
     relevant_docs = vectorstore.similarity_search(question, top_k)
     
-    # **SIMPLE & SAFE FORMAT**
-    answer_lines = [f"**{question}**"]
-    answer_lines.append("")  # Spacing
+    answer = f"**{question}**"
     
-    # Clean PDF excerpts (no bullet chars that break markdown)
     for doc in relevant_docs[:3]:
-        text = doc["document"]
-        # Split into clean sentences
-        sentences = re.split(r'[.!?]+', text)
+        sentences = [s.strip() for s in doc["document"].split('.') if len(s.strip()) > 20]
         for sentence in sentences[:2]:
-            sentence = sentence.strip()
-            if len(sentence) > 15:
-                answer_lines.append(f"\"{sentence.capitalize()}\"")
-        answer_lines.append("")  # Spacing
+            answer += f"\n• {sentence.capitalize()}"
     
-    # Safe source reference
-    source = doc['metadata']['source']
-    page = doc['metadata']['page']
-    answer_lines.append(f"*From: {source} (page {page})*")
-    
-    return "\n".join(answer_lines), relevant_docs
+    answer += f"\n\n*Source: {doc['metadata']['source']}*"
+    return answer, relevant_docs
 
-# 🔥 BULLETPROOF DISPLAY (No replace chains!)
-def display_answer(response):
-    """Safe markdown rendering"""
-    st.markdown(f"""
-    <div class='answer-card'>
-        <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 20px;'>
-            <span style='font-size: 1.8rem;'>📄</span>
-            <h3 style='margin: 0; color: #60a5fa;'>From Your PDF</h3>
-        </div>
-        <div style='font-size: 1.1rem; line-height: 1.7; color: #e2e8f0; padding: 20px;'>
-            {response}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# Replace your query submission block with:
-if submitted and question.strip() and st.session_state.rag_system_ready:
-    with st.spinner("🧠 Analyzing..."):
-        response, relevant_docs = rag_pipeline(question, st.session_state.vectorstore, top_k)
-        st.session_state.chat_history.append({"role": "user", "content": question})
-        st.session_state.chat_history.append({"role": "assistant", "content": response})
-    
-    display_answer(response)  # ✅ SAFE
 
 
 
@@ -194,51 +158,49 @@ else:
 
 st.divider()
 
-# ❓ QUERY SECTION (Fixed!)
+# ❓ QUERY SECTION - FULLY FIXED
 st.markdown("### ❓ Intelligent Query")
-st.info("Ask questions about your uploaded documents. Semantic search finds relevant content automatically.")
+st.info("Ask questions about your uploaded documents.")
 
+# Chat history
 if st.session_state.chat_history:
-    st.markdown("**Recent Conversation:**")
     for msg in st.session_state.chat_history[-4:]:
-        role = "Q" if msg["role"] == "user" else "A"
-        st.markdown(f"**{role}:** {msg['content'][:300]}...")
+        role = "👤 Q" if msg["role"] == "user" else "🤖 A"
+        st.markdown(f"**{role}:** {msg['content'][:250]}...")
 
-# 🔥 FIXED QUERY FORM
-with st.form("query_form", clear_on_submit=True):
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        question = st.text_input("Your question about the document", placeholder="e.g. What does this document explain about Python?")
-    with col2:
-        top_k = st.number_input("Results", min_value=1, max_value=10, value=5, step=1)
-    submitted = st.form_submit_button("🔍 Analyze Document", use_container_width=True)
+# 🔥 FIXED FORM - Variables in MAIN scope
+question = st.text_input(
+    "Ask about your PDF:", 
+    placeholder="e.g. What is Python used for?",
+    label_visibility="collapsed"
+)
 
-if submitted and question.strip() and st.session_state.rag_system_ready:
-    with st.spinner("🧠 Semantic search + analysis..."):
-        response, relevant_docs = rag_pipeline(question, st.session_state.vectorstore, top_k)
-        st.session_state.chat_history.append({"role": "user", "content": question})
-        st.session_state.chat_history.append({"role": "assistant", "content": response})
+top_k = st.slider("Context depth", 1, 10, 3)
 
-    # Replace your answer display with this:
-st.markdown(f"""
-<div class='answer-card'>
-    <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 20px;'>
-        <span style='font-size: 1.8rem;'>📄</span>
-        <h3 style='margin: 0; color: #60a5fa;'>From Your PDF</h3>
-    </div>
-    <div style='font-size: 1.1rem; line-height: 1.7; color: #e2e8f0;'>
-        <div style='background: rgba(59,130,246,0.1); padding: 20px; border-radius: 12px; border-left: 4px solid #3b82f6;'>
-            {response.replace('\n', '<br>').replace('• ', '<br>• ')}
+# ✅ Button in MAIN scope = submitted works!
+if st.button("🔍 Analyze PDF", type="primary", use_container_width=True) and question.strip():
+    if st.session_state.rag_system_ready:
+        with st.spinner("Searching PDF..."):
+            response, relevant_docs = rag_pipeline(question, st.session_state.vectorstore)
+            
+            st.session_state.chat_history.append({"role": "user", "content": question})
+            st.session_state.chat_history.append({"role": "assistant", "content": response})
+        
+        # ✅ SAFE DISPLAY
+        st.markdown(f"""
+        <div class='answer-card'>
+            <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 20px;'>
+                <span style='font-size: 1.8rem;'>📄</span>
+                <h3 style='margin: 0; color: #60a5fa;'>From Your PDF</h3>
+            </div>
+            <div style='font-size: 1.1rem; line-height: 1.7; color: #e2e8f0; padding: 24px; border-radius: 12px; background: rgba(30, 41, 59, 0.5);'>
+                {response}
+            </div>
         </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+        
+        # Source info
+        st.caption(f"Found in: {st.session_state.sources[0]}")
+    else:
+        st.warning("👆 Upload a PDF first!")
 
-
-# YOUR PERFECT FOOTER
-st.markdown("""
-<div style='text-align: center; padding: 2rem; background: rgba(30, 41, 59, 0.8); border-radius: 16px; margin-top: 3rem; border: 1px solid #334155;'>
-    <h4 style='color: #94a3b8; margin-bottom: 1rem;'>Production RAG Pipeline</h4>
-    <p style='color: #64748b; font-size: 0.95rem;'>Streamlit Cloud • Semantic Search • Zero Infrastructure</p>
-</div>
-""", unsafe_allow_html=True)
