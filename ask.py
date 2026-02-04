@@ -71,7 +71,6 @@ async def send_rag_query_event(question: str, top_k: int) -> None:
 
     return result[0]
 
-
 def _inngest_api_base() -> str:
     # Local dev server default; configurable via env
     return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
