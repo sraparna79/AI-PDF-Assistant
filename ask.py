@@ -58,80 +58,46 @@ if uploaded is not None:
 st.divider()
 st.title("❓ Ask a question about your PDF")
 
-if st.session_state.chunks:
+
     # 🔥 ASYNC-STYLE QUERY PROCESSING (No Inngest, pure local)
-    async def search_pdf(question: str, top_k: int = 5) -> Dict:
-        """Simulate Inngest query event processing"""
-        best_chunks = []
-        
-        for i, chunk in enumerate(st.session_state.chunks):
-            query_words = set(question.lower().split())
-            chunk_words = set(chunk.lower().split())
-            score = len(query_words.intersection(chunk_words))
-            if score > 0:
-                best_chunks.append((chunk, score, i))
-        
-        best_chunks.sort(key=lambda x: x[1], reverse=True)
-        top_results = best_chunks[:top_k]
-        
-        answer_parts = []
-        seen_sources = set()
-        for chunk, score, idx in top_results:
-            source = st.session_state.sources[idx]["filename"]
-            if source not in seen_sources:
-                seen_sources.add(source)
-            
-            sentences = re.split(r'[.!?]+', chunk)
-            for sent in sentences:
-                sent = sent.strip()
-                if len(sent) > 20:
-                    answer_parts.append(sent.capitalize())
-                    break
-        
-        return {
-            "answer": " ".join(answer_parts[:3]),
-            "sources": list(seen_sources),
-            "matches": len(top_results)
-        }
+    # Remove ALL asyncio code - replace with:
+def search_pdf(question: str, top_k: int = 5) -> Dict:  # Make it sync
+    """Local PDF search (no async needed)"""
+    best_chunks = []
 
-    # 🔥 FORM (Exact Inngest replica)
-    with st.form("rag_query_form", clear_on_submit=True):
-        question = st.text_input("Your question", placeholder="e.g. What is the main topic?")
-        top_k = st.number_input("Top chunks", min_value=1, max_value=10, value=4, step=1)
-        col1, col2 = st.columns(2)
-        submitted = col1.form_submit_button("🔍 Ask", use_container_width=True)
+    for i, chunk in enumerate(st.session_state.chunks):
+        query_words = set(question.lower().split())
+        chunk_words = set(chunk.lower().split())
+        score = len(query_words.intersection(chunk_words))
+        if score > 0:  # This is too strict!
+            best_chunks.append((chunk, score, i))
+    
+    if not best_chunks:
+        return {"answer": "", "sources": [], "matches": 0}
+    
+    best_chunks.sort(key=lambda x: x[1], reverse=True)
+    top_results = best_chunks[:top_k]
+    
+    answer_parts = []
+    seen_sources = set()
+    for chunk, score, idx in top_results:
+        source = st.session_state.sources[idx]["filename"]
+        seen_sources.add(source)
         
-        if col2.form_submit_button("🗑️ Clear", use_container_width=True):
-            st.session_state.chunks = []
-            st.session_state.sources = []
-            st.rerun()
+        sentences = re.split(r'[.!?]+', chunk)
+        for sent in sentences:
+            sent = sent.strip()
+            if len(sent) > 20:
+                answer_parts.append(sent.capitalize())
+                break
+    
+    return {
+        "answer": " ".join(answer_parts[:3]) or "Found relevant content (no full sentences extracted)",
+        "sources": list(seen_sources),
+        "matches": len(top_results)
+    }
 
-    if submitted and question.strip():
-        with st.spinner("🔄 Generating answer..."):
-            # Simulate Inngest event flow with asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            output = loop.run_until_complete(search_pdf(question.strip(), top_k))
-            loop.close()
-
-        # 🔥 ANSWER DISPLAY (Inngest-style)
-        st.subheader("📝 Answer")
-        if output["answer"]:
-            st.markdown(f"**{question}**")
-            st.write(output["answer"])
-        else:
-            st.warning("No relevant content found. Try different keywords.")
-        
-        if output["sources"]:
-            st.subheader("📚 Sources")
-            for source in output["sources"]:
-                st.caption(f"• {source}")
-        
-        st.caption(f"*Found {output['matches']} matching chunks*")
-        
-else:
-    st.info("👆 **Upload a PDF first** to start querying")
-
-# Footer
-st.markdown("---")
-st.caption("**Production RAG Pipeline** - Powered by Streamlit")
+# In the form section, replace asyncio with:
+if submitted and question.strip():
+    with st.spinner("🔄 Searching PDF..."):
+        output = search_pdf(question.strip(), top_k)  # Direct call
