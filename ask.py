@@ -6,6 +6,18 @@ import inngest
 from dotenv import load_dotenv
 import os
 import requests
+import streamlit as st
+
+# 🔥 ADD THESE 4 LINES 
+if "rag_system_ready" not in st.session_state:
+    st.session_state.rag_system_ready = False
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "documents" not in st.session_state:
+    st.session_state.documents = []
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
+
 
 load_dotenv()
 
