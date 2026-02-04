@@ -182,9 +182,22 @@ else:
         st.caption(f"**Sources**: {', '.join(set([m['source'] for m in matches]))}")
 
 # 🔥 CHAT HISTORY
-if "chat_history" in st.session_state and st.session_state.chat_history:
+# 🔥 CHAT HISTORY - BULLETPROOF VERSION
+if ("chat_history" in st.session_state and 
+    st.session_state.chat_history and 
+    len(st.session_state.chat_history) > 0):
+    
     st.markdown("---")
     st.markdown("### 💬 Recent Queries")
-    for chat in st.session_state.chat_history[-3:]:
-        with st.expander(f"Q: {chat['question'][:80]}..."):
-            st.markdown(chat['answer'])
+    
+    for i, chat_item in enumerate(st.session_state.chat_history[-3:]):
+        # Safe dict access with defaults
+        question = chat_item.get('question', f"Query #{i+1}")
+        answer = chat_item.get('answer', 'Analyzing your PDFs...')
+        sources = chat_item.get('sources', [])
+        
+        with st.expander(f"Q: {question[:80]}..."):
+            st.markdown(answer)
+            if sources:
+                st.caption(f"Sources: {', '.join(sources[:2])}")
+
