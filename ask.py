@@ -98,15 +98,28 @@ def process_pdf_content(file_path):
     return chunk_text(raw_content)
 
 def rag_pipeline(question, vectorstore, top_k=5):
+    """Simplified RAG - Clean PDF quotes only"""
     if not vectorstore.documents:
         return "No documents indexed yet.", []
+    
     relevant_docs = vectorstore.similarity_search(question, top_k)
-    context = "\n\n".join([doc["document"][:300] + "..." for doc in relevant_docs])
-    answer = f"**Analysis Complete** 🤖\n\n**Query**: {question}\n\n**Top Matches** ({len(relevant_docs)} found):\n"
-    for i, doc in enumerate(relevant_docs[:3], 1):
-        answer += f"\n\n{i}. **Score: {doc['score']:.3f}**  \n```{doc['document'][:200]}...```"
-    answer += f"\n\n**Key Insights**: Semantic search identified {len(relevant_docs)} relevant chunks from your document."
-    return answer, relevant_docs
+    
+    # **SIMPLE FORMAT**: Bold query + direct PDF excerpts
+    answer = f"**{question}**\n\n"
+    
+    # Extract 2-3 clean lines from PDF (no scores)
+    for doc in relevant_docs[:3]:
+        # Clean up for readability
+        lines = doc["document"].split('. ')
+        for line in lines[:2]:  # 2 lines max per chunk
+            if len(line.strip()) > 20:  # Skip tiny fragments
+                answer += f"• {line.strip()}\n"
+        answer += "\n"
+    
+    answer += f"*Found in: {doc['metadata']['source']} (page {doc['metadata']['page']})*"
+    
+    return answer.strip(), relevant_docs
+
 
 # 📊 STATUS DASHBOARD
 col1, col2, col3 = st.columns(3)
@@ -175,17 +188,21 @@ if submitted and question.strip() and st.session_state.rag_system_ready:
         st.session_state.chat_history.append({"role": "user", "content": question})
         st.session_state.chat_history.append({"role": "assistant", "content": response})
 
-    st.markdown(f"""
-    <div class='answer-card'>
-        <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 16px;'>
-            <span style='font-size: 1.8rem;'>🔍</span>
-            <h3 style='margin: 0; color: #60a5fa;'>RAG Pipeline Results</h3>
-        </div>
-        <div style='font-size: 1.05rem; line-height: 1.8; color: #e2e8f0;'>
-            {response.replace('```', '<code>').replace('\n', '<br>')}
+    # Replace your answer display with this:
+st.markdown(f"""
+<div class='answer-card'>
+    <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 20px;'>
+        <span style='font-size: 1.8rem;'>📄</span>
+        <h3 style='margin: 0; color: #60a5fa;'>From Your PDF</h3>
+    </div>
+    <div style='font-size: 1.1rem; line-height: 1.7; color: #e2e8f0;'>
+        <div style='background: rgba(59,130,246,0.1); padding: 20px; border-radius: 12px; border-left: 4px solid #3b82f6;'>
+            {response.replace('\n', '<br>').replace('• ', '<br>• ')}
         </div>
     </div>
-    """, unsafe_allow_html=True)
+</div>
+""", unsafe_allow_html=True)
+
 
 # YOUR PERFECT FOOTER
 st.markdown("""
