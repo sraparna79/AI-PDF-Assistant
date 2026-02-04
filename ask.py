@@ -1,172 +1,125 @@
+import asyncio
+from pathlib import Path
+import time
+
 import streamlit as st
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-import re
+import inngest
+from dotenv import load_dotenv
+import os
+import requests
 
-st.set_page_config(page_title="AI PDF Assistant", page_icon="📄", layout="wide")
+load_dotenv()
 
-# Session state
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
-if "sources" not in st.session_state:
-    st.session_state.sources = []
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "processed" not in st.session_state:
-    st.session_state.processed = False
+st.set_page_config(page_title="RAG Ingest PDF", page_icon="📄", layout="centered")
 
-st.markdown("""
-<style>
-.main {background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%); color: #e2e8f0;}
-.stButton > button {background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; border-radius: 12px;}
-.answer-box {background: linear-gradient(135deg, #1e293b, #334155); padding: 20px; border-radius: 16px; border-left: 4px solid #3b82f6;}
-</style>
-""", unsafe_allow_html=True)
 
-# Header
-st.markdown("""
-<div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #1e293b, #334155); border-radius: 20px;'>
-    <h1 style='color: #3b82f6; font-size: 3rem;'>📄 AI PDF Assistant</h1>
-    <p style='color: #94a3b8;'>Upload PDF → Ask Questions → Get Answers from YOUR Document</p>
-</div>
-""", unsafe_allow_html=True)
+@st.cache_resource
+def get_inngest_client() -> inngest.Inngest:
+    return inngest.Inngest(app_id="rag_app", is_production=False)
 
-# Upload
-col1, col2 = st.columns([3, 1])
-with col1:
-    uploaded_file = st.file_uploader("Choose PDF file", type="pdf")
 
-with col2:
-    if st.session_state.chunks:
-        st.metric("Chunks", len(st.session_state.chunks))
-    else:
-        st.info("No PDF loaded")
+def save_uploaded_pdf(file) -> Path:
+    uploads_dir = Path("uploads")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    file_path = uploads_dir / file.name
+    file_bytes = file.getbuffer()
+    file_path.write_bytes(file_bytes)
+    return file_path
 
-# Process PDF (ONCE)
-if uploaded_file is not None and not st.session_state.processed:
-    with st.spinner("Analyzing PDF..."):
-        # Read PDF bytes and extract text blocks
-        content = uploaded_file.read()
-        text = content.decode('latin1', errors='ignore')
-        
-        # Extract meaningful text blocks (real content)
-        text_blocks = re.findall(r'[a-zA-Z]{4,}[a-zA-Z0-9\s\.,:;()]{30,500}', text)
-        
-        # Clean and chunk
-        st.session_state.chunks = []
-        st.session_state.sources = []
-        
-        for i, block in enumerate(text_blocks[:20]):  # Top 20 blocks
-            clean_block = re.sub(r'\s+', ' ', block.strip())
-            if len(clean_block) > 40:
-                st.session_state.chunks.append(clean_block[:400])
-                st.session_state.sources.append({
-                    "filename": uploaded_file.name,
-                    "chunk_id": i+1
-                })
-        
-        st.session_state.processed = True
-        st.session_state.filename = uploaded_file.name
-        
-        st.success(f"✅ **{uploaded_file.name}** analyzed! Found {len(st.session_state.chunks)} text blocks")
-        st.balloons()
 
-# Metrics
-if st.session_state.chunks:
-    col1, col2 = st.columns(2)
-    col1.metric("📄 Document", st.session_state.filename)
-    col2.metric("🔍 Chunks", len(st.session_state.chunks))
+async def send_rag_ingest_event(pdf_path: Path) -> None:
+    client = get_inngest_client()
+    await client.send(
+        inngest.Event(
+            name="rag/ingest_pdf",
+            data={
+                "pdf_path": str(pdf_path.resolve()),
+                "source_id": pdf_path.name,
+            },
+        )
+    )
 
-# Chat interface
-st.markdown("---")
-st.markdown("### 💬 Ask about your PDF")
 
-# Show chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if "sources" in message:
-            st.caption(f"**Source**: {message['sources'][0]}")
+st.title("Upload a PDF to Ingest")
+uploaded = st.file_uploader("Choose a PDF", type=["pdf"], accept_multiple_files=False)
 
-# Chat input
-if prompt := st.chat_input("Ask a question about your PDF..."):
-    # User message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+if uploaded is not None:
+    with st.spinner("Uploading and triggering ingestion..."):
+        path = save_uploaded_pdf(uploaded)
+        # Kick off the event and block until the send completes
+        asyncio.run(send_rag_ingest_event(path))
+        # Small pause for user feedback continuity
+        time.sleep(0.3)
+    st.success(f"Triggered ingestion for: {path.name}")
+    st.caption("You can upload another PDF if you like.")
 
-    if st.session_state.chunks:
-        with st.chat_message("assistant"):
-            with st.spinner("Searching document..."):
-                # Simple keyword + position search (stable)
-                best_chunks = []
-                scores = []
-                
-                for i, chunk in enumerate(st.session_state.chunks):
-                    # Keyword matching
-                    score = sum(1 for word in prompt.lower().split() if word in chunk.lower())
-                    if score > 0:
-                        best_chunks.append((chunk, i))
-                        scores.append(score)
-                
-                # Sort by relevance
-                if best_chunks:
-                    best_chunks.sort(key=lambda x: scores[st.session_state.chunks.index(x[0])], reverse=True)
-                    top_chunks = best_chunks[:3]
-                else:
-                    top_chunks = [(st.session_state.chunks[0], 0)]  # Fallback
-                
-                # Build answer
-                answer = f"**{prompt}**"
-                
-                seen_sources = set()
-                for chunk, chunk_id in top_chunks:
-                    source = st.session_state.sources[chunk_id]["filename"]
-                    
-                    # Extract sentences
-                    sentences = re.split(r'[.!?]+', chunk)
-                    for sentence in sentences:
-                        sentence = sentence.strip()
-                        if len(sentence) > 25:
-                            answer += f"\n• **{sentence.capitalize()}**"
-                            break
-                    
-                    if source not in seen_sources:
-                        seen_sources.add(source)
-                
-                answer += f"\n\n**From your PDF**: {list(seen_sources)[0]}"
-                
-                # Display
-                st.markdown(f"""
-                <div class='answer-box'>
-                    <div style='font-size: 1.1rem; line-height: 1.6;'>
-                        {answer.replace('\\n', '<br>')}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Save message
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer,
-                    "sources": [list(seen_sources)[0]]
-                })
-    else:
-        with st.chat_message("assistant"):
-            st.warning("👆 Upload and process PDF first!")
+st.divider()
+st.title("Ask a question about your PDFs")
 
-# Controls
-col1, col2 = st.columns(2)
-if col1.button("🔄 New PDF", use_container_width=True):
-    st.session_state.chunks = []
-    st.session_state.sources = []
-    st.session_state.messages = []
-    st.session_state.processed = False
-    st.rerun()
 
-if col2.button("🗑️ Clear Chat", use_container_width=True):
-    st.session_state.messages = []
-    st.rerun()
+async def send_rag_query_event(question: str, top_k: int) -> None:
+    client = get_inngest_client()
+    result = await client.send(
+        inngest.Event(
+            name="rag/query_pdf_ai",
+            data={
+                "question": question,
+                "top_k": top_k,
+            },
+        )
+    )
 
-st.markdown("---")
-st.markdown("*Production-ready PDF RAG Assistant - Stable & Fast*")
+    return result[0]
+
+
+def _inngest_api_base() -> str:
+    # Local dev server default; configurable via env
+    return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
+
+
+def fetch_runs(event_id: str) -> list[dict]:
+    url = f"{_inngest_api_base()}/events/{event_id}/runs"
+    resp = requests.get(url)
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("data", [])
+
+
+def wait_for_run_output(event_id: str, timeout_s: float = 120.0, poll_interval_s: float = 0.5) -> dict:
+    start = time.time()
+    last_status = None
+    while True:
+        runs = fetch_runs(event_id)
+        if runs:
+            run = runs[0]
+            status = run.get("status")
+            last_status = status or last_status
+            if status in ("Completed", "Succeeded", "Success", "Finished"):
+                return run.get("output") or {}
+            if status in ("Failed", "Cancelled"):
+                raise RuntimeError(f"Function run {status}")
+        if time.time() - start > timeout_s:
+            raise TimeoutError(f"Timed out waiting for run output (last status: {last_status})")
+        time.sleep(poll_interval_s)
+
+
+with st.form("rag_query_form"):
+    question = st.text_input("Your question")
+    top_k = st.number_input("How many chunks to retrieve", min_value=1, max_value=20, value=5, step=1)
+    submitted = st.form_submit_button("Ask")
+
+    if submitted and question.strip():
+        with st.spinner("Sending event and generating answer..."):
+            # Fire-and-forget event to Inngest for observability/workflow
+            event_id = asyncio.run(send_rag_query_event(question.strip(), int(top_k)))
+            # Poll the local Inngest API for the run's output
+            output = wait_for_run_output(event_id)
+            answer = output.get("answer", "")
+            sources = output.get("sources", [])
+
+        st.subheader("Answer")
+        st.write(answer or "(No answer)")
+        if sources:
+            st.caption("Sources")
+            for s in sources:
+                st.write(f"- {s}")
