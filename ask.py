@@ -98,27 +98,58 @@ def process_pdf_content(file_path):
     return chunk_text(raw_content)
 
 def rag_pipeline(question, vectorstore, top_k=5):
-    """Simplified RAG - Clean PDF quotes only"""
+    """Clean PDF quotes - NO markdown conflicts"""
     if not vectorstore.documents:
         return "No documents indexed yet.", []
     
     relevant_docs = vectorstore.similarity_search(question, top_k)
     
-    # **SIMPLE FORMAT**: Bold query + direct PDF excerpts
-    answer = f"**{question}**\n\n"
+    # **SIMPLE & SAFE FORMAT**
+    answer_lines = [f"**{question}**"]
+    answer_lines.append("")  # Spacing
     
-    # Extract 2-3 clean lines from PDF (no scores)
+    # Clean PDF excerpts (no bullet chars that break markdown)
     for doc in relevant_docs[:3]:
-        # Clean up for readability
-        lines = doc["document"].split('. ')
-        for line in lines[:2]:  # 2 lines max per chunk
-            if len(line.strip()) > 20:  # Skip tiny fragments
-                answer += f"• {line.strip()}\n"
-        answer += "\n"
+        text = doc["document"]
+        # Split into clean sentences
+        sentences = re.split(r'[.!?]+', text)
+        for sentence in sentences[:2]:
+            sentence = sentence.strip()
+            if len(sentence) > 15:
+                answer_lines.append(f"\"{sentence.capitalize()}\"")
+        answer_lines.append("")  # Spacing
     
-    answer += f"*Found in: {doc['metadata']['source']} (page {doc['metadata']['page']})*"
+    # Safe source reference
+    source = doc['metadata']['source']
+    page = doc['metadata']['page']
+    answer_lines.append(f"*From: {source} (page {page})*")
     
-    return answer.strip(), relevant_docs
+    return "\n".join(answer_lines), relevant_docs
+
+# 🔥 BULLETPROOF DISPLAY (No replace chains!)
+def display_answer(response):
+    """Safe markdown rendering"""
+    st.markdown(f"""
+    <div class='answer-card'>
+        <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 20px;'>
+            <span style='font-size: 1.8rem;'>📄</span>
+            <h3 style='margin: 0; color: #60a5fa;'>From Your PDF</h3>
+        </div>
+        <div style='font-size: 1.1rem; line-height: 1.7; color: #e2e8f0; padding: 20px;'>
+            {response}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Replace your query submission block with:
+if submitted and question.strip() and st.session_state.rag_system_ready:
+    with st.spinner("🧠 Analyzing..."):
+        response, relevant_docs = rag_pipeline(question, st.session_state.vectorstore, top_k)
+        st.session_state.chat_history.append({"role": "user", "content": question})
+        st.session_state.chat_history.append({"role": "assistant", "content": response})
+    
+    display_answer(response)  # ✅ SAFE
+
 
 
 # 📊 STATUS DASHBOARD
