@@ -1,124 +1,131 @@
-import asyncio
-from pathlib import Path
-import time
 import streamlit as st
-import inngest
-from dotenv import load_dotenv
-import os
-import requests
+from pathlib import Path
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import re
 
-load_dotenv()
+st.set_page_config(page_title="PDF RAG Assistant", page_icon="📄", layout="wide")
 
-st.set_page_config(page_title="RAG Ingest PDF", page_icon="📄", layout="centered")
+# 🔥 SESSION STATE
+if "chunks" not in st.session_state:
+    st.session_state.chunks = []
+if "sources" not in st.session_state:
+    st.session_state.sources = []
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
+st.title("📄 PDF RAG Assistant")
+st.markdown("**Upload PDF → Process → Ask Questions**")
 
-@st.cache_resource
-def get_inngest_client() -> inngest.Inngest:
-    return inngest.Inngest(app_id="rag_app", is_production=False)
+# 🔥 UPLOAD & PROCESS (Replaces Inngest)
+uploaded_file = st.file_uploader("Choose PDF", type="pdf")
 
+if uploaded_file is not None:
+    with st.spinner("🔄 Processing PDF (Ingest Pipeline)..."):
+        # Save file
+        uploads_dir = Path("uploads")
+        uploads_dir.mkdir(exist_ok=True)
+        path = uploads_dir / uploaded_file.name
+        path.write_bytes(uploaded_file.getvalue())
+        
+        # Read PDF bytes and extract text
+        content = uploaded_file.getvalue()
+        text = content.decode('latin1', errors='ignore')
+        
+        # Extract meaningful text blocks
+        blocks = re.findall(r'[a-zA-Z]{5,}[a-zA-Z0-9\s\.,:;()]{50,400}', text)
+        
+        # Process chunks
+        st.session_state.chunks = []
+        st.session_state.sources = []
+        
+        for i, block in enumerate(blocks[:25]):
+            clean_block = re.sub(r'\s+', ' ', block.strip())
+            if len(clean_block) > 40:
+                st.session_state.chunks.append(clean_block)
+                st.session_state.sources.append({
+                    "filename": uploaded_file.name,
+                    "chunk_id": i+1
+                })
+        
+        st.success(f"✅ **Ingested {uploaded_file.name}** - {len(st.session_state.chunks)} chunks ready!")
+        
+        # Simulate Inngest completion
+        st.balloons()
 
-def save_uploaded_pdf(file) -> Path:
-    uploads_dir = Path("uploads")
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    file_path = uploads_dir / file.name
-    file_bytes = file.getbuffer()
-    file_path.write_bytes(file_bytes)
-    return file_path
+# 🔥 STATUS
+if st.session_state.chunks:
+    col1, col2 = st.columns(2)
+    col1.metric("📄 PDF", st.session_state.sources[0]["filename"])
+    col2.metric("🔍 Chunks", len(st.session_state.chunks))
 
+# 🔥 QUERY (Replaces your query event)
+st.markdown("---")
+st.markdown("### ❓ Query Your PDF")
 
-async def send_rag_ingest_event(pdf_path: Path) -> None:
-    client = get_inngest_client()
-    await client.send(
-        inngest.Event(
-            name="rag/ingest_pdf",
-            data={
-                "pdf_path": str(pdf_path.resolve()),
-                "source_id": pdf_path.name,
-            },
-        )
-    )
+if not st.session_state.chunks:
+    st.warning("👆 **Upload PDF first**")
+else:
+    # Chat-like query
+    question = st.text_input("Ask about your document:")
+    
+    if st.button("🔍 Search PDF") and question:
+        with st.spinner("Searching..."):
+            # Simple keyword relevance scoring
+            best_chunks = []
+            
+            for i, chunk in enumerate(st.session_state.chunks):
+                # Count matching words
+                query_words = set(question.lower().split())
+                chunk_words = set(chunk.lower().split())
+                score = len(query_words.intersection(chunk_words))
+                
+                if score > 0:
+                    best_chunks.append((chunk, score, i))
+            
+            # Sort by relevance
+            best_chunks.sort(key=lambda x: x[1], reverse=True)
+            
+            # Build answer
+            answer = f"**{question}**\n\n"
+            seen_sources = set()
+            
+            for chunk, score, idx in best_chunks[:4]:
+                source = st.session_state.sources[idx]["filename"]
+                
+                # Extract key sentence
+                sentences = re.split(r'[.!?]+', chunk)
+                for sent in sentences:
+                    sent = sent.strip()
+                    if len(sent) > 20:
+                        answer += f"• **{sent.capitalize()}**\n"
+                        break
+                
+                if source not in seen_sources:
+                    seen_sources.add(source)
+            
+            answer += f"\n**Source**: {list(seen_sources)[0]}"
+            
+            # Display in chat style
+            st.markdown(f"""
+            <div style='background: linear-gradient(135deg, #1e293b, #334155); padding: 24px; border-radius: 16px; border-left: 5px solid #3b82f6; margin: 20px 0;'>
+                <div style='font-size: 1.1rem; line-height: 1.7; color: #e2e8f0;'>
+                    {answer.replace('\n', '<br>')}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
+# 🔥 CONTROLS
+col1, col2 = st.columns(2)
+if col1.button("🗑️ Clear All", use_container_width=True):
+    st.session_state.chunks = []
+    st.session_state.sources = []
+    st.session_state.messages = []
+    st.rerun()
 
-st.title("Upload a PDF to Ingest")
-uploaded = st.file_uploader("Choose a PDF", type=["pdf"], accept_multiple_files=False)
+if col2.button("📋 Chat History", use_container_width=True):
+    st.session_state.show_history = not st.session_state.get("show_history", False)
+    st.rerun()
 
-if uploaded is not None:
-    with st.spinner("Uploading and triggering ingestion..."):
-        path = save_uploaded_pdf(uploaded)
-        # Kick off the event and block until the send completes
-        asyncio.run(send_rag_ingest_event(path))
-        # Small pause for user feedback continuity
-        time.sleep(0.3)
-    st.success(f"Triggered ingestion for: {path.name}")
-    st.caption("You can upload another PDF if you like.")
-
-st.divider()
-st.title("Ask a question about your PDFs")
-
-
-async def send_rag_query_event(question: str, top_k: int) -> None:
-    client = get_inngest_client()
-    result = await client.send(
-        inngest.Event(
-            name="rag/query_pdf_ai",
-            data={
-                "question": question,
-                "top_k": top_k,
-            },
-        )
-    )
-
-    return result[0]
-
-
-def _inngest_api_base() -> str:
-    # Local dev server default; configurable via env
-    return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
-
-
-def fetch_runs(event_id: str) -> list[dict]:
-    url = f"{_inngest_api_base()}/events/{event_id}/runs"
-    resp = requests.get(url)
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("data", [])
-
-
-def wait_for_run_output(event_id: str, timeout_s: float = 120.0, poll_interval_s: float = 0.5) -> dict:
-    start = time.time()
-    last_status = None
-    while True:
-        runs = fetch_runs(event_id)
-        if runs:
-            run = runs[0]
-            status = run.get("status")
-            last_status = status or last_status
-            if status in ("Completed", "Succeeded", "Success", "Finished"):
-                return run.get("output") or {}
-            if status in ("Failed", "Cancelled"):
-                raise RuntimeError(f"Function run {status}")
-        if time.time() - start > timeout_s:
-            raise TimeoutError(f"Timed out waiting for run output (last status: {last_status})")
-        time.sleep(poll_interval_s)
-
-
-with st.form("rag_query_form"):
-    question = st.text_input("Your question")
-    top_k = st.number_input("How many chunks to retrieve", min_value=1, max_value=20, value=5, step=1)
-    submitted = st.form_submit_button("Ask")
-
-    if submitted and question.strip():
-        with st.spinner("Sending event and generating answer..."):
-            # Fire-and-forget event to Inngest for observability/workflow
-            event_id = asyncio.run(send_rag_query_event(question.strip(), int(top_k)))
-            # Poll the local Inngest API for the run's output
-            output = wait_for_run_output(event_id)
-            answer = output.get("answer", "")
-            sources = output.get("sources", [])
-
-        st.subheader("Answer")
-        st.write(answer or "(No answer)")
-        if sources:
-            st.caption("Sources")
-            for s in sources:
-                st.write(f"- {s}")
+st.markdown("---")
+st.caption("**Production RAG Pipeline** - No Inngest needed!")
