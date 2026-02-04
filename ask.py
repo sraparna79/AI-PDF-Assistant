@@ -1,139 +1,127 @@
-import streamlit as st
-import re
+import asyncio
+from pathlib import Path
 import time
-from typing import List, Dict
 
-st.set_page_config(page_title="PDF RAG Assistant", page_icon="📄", layout="wide")
+import streamlit as st
+import inngest
+from dotenv import load_dotenv
+import os
+import requests
 
-def extract_pdf_text_simple(uploaded_file):
-    """NO PyPDF2 - Pure regex extraction that actually WORKS"""
-    raw_content = uploaded_file.getvalue().decode('latin1', errors='ignore')
-    
-    # Extract ALL text blocks (much better regex)
-    text_blocks = re.findall(r'[a-zA-Z][a-zA-Z0-9\s\.,:;()\-–—]{50,1200}', raw_content)
-    
-    chunks = []
-    sources = []
-    
-    for i, block in enumerate(text_blocks[:30]):
-        # Clean aggressively
-        clean = re.sub(r'[^\w\s\.,:;()\-–—]', ' ', block)
-        clean = re.sub(r'\s+', ' ', clean.strip())
-        
-        # Skip junk (headers, page numbers, etc.)
-        if (len(clean) > 100 and 
-            not re.match(r'^\d+\s*$', clean) and 
-            len(re.findall(r'[a-zA-Z]{4,}', clean)) > 3):
-            
-            chunks.append(clean[:900])
-            sources.append({"filename": uploaded_file.name, "chunk_id": i+1})
-    
-    return chunks, sources
+load_dotenv()
 
-def search_chunks(question: str, top_k: int = 5) -> Dict:
-    """Fuzzy search - ALWAYS finds something"""
-    if not st.session_state.chunks:
-        return {"answer": "", "sources": [], "matches": 0}
-    
-    best_chunks = []
-    query_lower = question.lower()
-    
-    for i, chunk in enumerate(st.session_state.chunks):
-        score = 0
-        
-        # Word matching
-        query_words = query_lower.split()
-        for word in query_words:
-            if len(word) > 3 and word in chunk.lower():
-                score += 3
-        
-        # Substring matching (partial matches)
-        for word in query_words:
-            if len(word) > 3:
-                score += len(re.findall(word, chunk.lower())) * 2
-        
-        # Length/quality bonus
-        score += min(len(chunk) / 1000, 2)
-        
-        best_chunks.append((chunk, score, i))
-    
-    # Sort and take top
-    best_chunks.sort(key=lambda x: x[1], reverse=True)
-    top_results = best_chunks[:top_k]
-    
-    # Build answer
-    answer_parts = []
-    sources_set = set()
-    
-    for chunk, score, idx in top_results:
-        sources_set.add(st.session_state.sources[idx]["filename"])
-        snippet = chunk[:350].rstrip('.') + "..."
-        answer_parts.append(snippet)
-    
-    answer = " ".join(answer_parts)[:1200]
-    
-    return {
-        "answer": answer or f"Found {len(top_results)} relevant sections in document",
-        "sources": list(sources_set),
-        "matches": len(top_results)
-    }
+st.set_page_config(page_title="RAG Ingest PDF", page_icon="📄", layout="centered")
 
-# SESSION STATE
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
-if "sources" not in st.session_state:
-    st.session_state.sources = []
 
-# UI
-st.title("📄 PDF RAG Assistant")
-st.markdown("**Upload → Search → Get Answers Instantly**")
+@st.cache_resource
+def get_inngest_client() -> inngest.Inngest:
+    return inngest.Inngest(app_id="rag_app", is_production=False)
 
-col1, col2 = st.columns([3, 1])
-with col1:
-    uploaded = st.file_uploader("Choose PDF", type="pdf", key="uploader")
-with col2:
-    st.metric("Chunks Ready", len(st.session_state.chunks))
+
+def save_uploaded_pdf(file) -> Path:
+    uploads_dir = Path("uploads")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    file_path = uploads_dir / file.name
+    file_bytes = file.getbuffer()
+    file_path.write_bytes(file_bytes)
+    return file_path
+
+
+async def send_rag_ingest_event(pdf_path: Path) -> None:
+    client = get_inngest_client()
+    await client.send(
+        inngest.Event(
+            name="rag/ingest_pdf",
+            data={
+                "pdf_path": str(pdf_path.resolve()),
+                "source_id": pdf_path.name,
+            },
+        )
+    )
+
+
+st.title("Upload a PDF to Ingest")
+uploaded = st.file_uploader("Choose a PDF", type=["pdf"], accept_multiple_files=False)
 
 if uploaded is not None:
-    with st.spinner("🔄 Processing PDF..."):
-        st.session_state.chunks, st.session_state.sources = extract_pdf_text_simple(uploaded)
+    with st.spinner("Uploading and triggering ingestion..."):
+        path = save_uploaded_pdf(uploaded)
+        # Kick off the event and block until the send completes
+        asyncio.run(send_rag_ingest_event(path))
+        # Small pause for user feedback continuity
         time.sleep(0.3)
-    
-    st.success(f"✅ **{len(st.session_state.chunks)} chunks extracted** from {uploaded.name}")
-    
-    # Preview first chunk
-    with st.expander("👀 Preview Content", expanded=False):
-        if st.session_state.chunks:
-            st.write("**Sample:**")
-            st.write(st.session_state.chunks[0][:400] + "...")
-        else:
-            st.warning("No readable text found - try a different PDF")
+    st.success(f"Triggered ingestion for: {path.name}")
+    st.caption("You can upload another PDF if you like.")
 
 st.divider()
+st.title("Ask a question about your PDFs")
 
-if st.session_state.chunks:
-    # Query form
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        question = st.text_input("❓ Ask about your PDF:", 
-                               placeholder="e.g. 'What is the main topic?' or 'sales figures'")
-    with col2:
-        top_k = st.slider("Results", 3, 8, 5, key="topk")
-    
-    if st.button("🔍 **SEARCH PDF**", use_container_width=True):
-        with st.spinner("Searching..."):
-            output = search_chunks(question, top_k)
-        
-        st.markdown("### 📝 **Answer**")
-        st.write(output["answer"])
-        
-        if output["sources"]:
-            st.caption(f"**📚 Sources**: {', '.join(output['sources'])}")
-        
-        st.caption(f"*Matched {output['matches']} sections*")
-        
-else:
-    st.info("👆 **Upload a PDF first** to enable search")
 
-st.markdown("---")
-st.caption("✨ Pure Streamlit - Zero external dependencies")
+async def send_rag_query_event(question: str, top_k: int) -> None:
+    client = get_inngest_client()
+    result = await client.send(
+        inngest.Event(
+            name="rag/query_pdf_ai",
+            data={
+                "question": question,
+                "top_k": top_k,
+            },
+        )
+    )
+
+    return result[0]
+
+
+def _inngest_api_base() -> str:
+    # Local dev server default; configurable via env
+    return os.getenv("INNGEST_API_BASE", "http://127.0.0.1:8288/v1")
+
+
+def fetch_runs(event_id: str) -> list[dict]:
+    url = f"{_inngest_api_base()}/events/{event_id}/runs"
+    resp = requests.get(url)
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("data", [])
+
+
+def wait_for_run_output(event_id: str, timeout_s: float = 120.0, poll_interval_s: float = 0.5) -> dict:
+    start = time.time()
+    last_status = None
+    while True:
+        runs = fetch_runs(event_id)
+        if runs:
+            run = runs[0]
+            status = run.get("status")
+            last_status = status or last_status
+            if status in ("Completed", "Succeeded", "Success", "Finished"):
+                return run.get("output") or {}
+            if status in ("Failed", "Cancelled"):
+                raise RuntimeError(f"Function run {status}")
+        if time.time() - start > timeout_s:
+            raise TimeoutError(f"Timed out waiting for run output (last status: {last_status})")
+        time.sleep(poll_interval_s)
+
+
+with st.form("rag_query_form"):
+    question = st.text_input("Your question")
+    top_k = st.number_input("How many chunks to retrieve", min_value=1, max_value=20, value=5, step=1)
+    submitted = st.form_submit_button("Ask")
+
+    if submitted and question.strip():
+        with st.spinner("Sending event and generating answer..."):
+            # Fire-and-forget event to Inngest for observability/workflow
+            event_id = asyncio.run(send_rag_query_event(question.strip(), int(top_k)))
+            # Poll the local Inngest API for the run's output
+            output = wait_for_run_output(event_id)
+            answer = output.get("answer", "")
+            sources = output.get("sources", [])
+
+        st.subheader("Answer")
+        st.write(answer or "(No answer)")
+        if sources:
+            st.caption("Sources")
+            for s in sources:
+                st.write(f"- {s}")
+
+
