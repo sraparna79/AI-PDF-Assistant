@@ -175,8 +175,14 @@ if submitted and question.strip():
     status_text = st.empty()
     
     # 🎯 Animate search
-    event_id = asyncio.run(send_rag_query_event(question.strip(), int(top_k)))
-    
+    # event_id = asyncio.run(send_rag_query_event(question.strip(), int(top_k)))
+    if st.session_state.rag_system_ready:
+        response = query_rag_system(question.strip(), top_k=int(top_k))
+        st.session_state.chat_history.append({"role": "user", "content": question})
+        st.session_state.chat_history.append({"role": "assistant", "content": response})
+    else:
+        st.error("❌ RAG system not ready. Upload PDFs first!")
+
     for i in range(101):
         progress_bar.progress(i)
         status_text.markdown(f"**🔍 Searching {len(question)} vectors...** {i}%")
