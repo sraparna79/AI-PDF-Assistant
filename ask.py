@@ -1,133 +1,137 @@
 import streamlit as st
+import asyncio
+import time
 from pathlib import Path
-import numpy as np
-
-from sklearn.metrics.pairwise import cosine_similarity
 import re
+from typing import List, Dict, Optional
+
 st.set_page_config(page_title="PDF RAG Assistant", page_icon="📄", layout="wide")
+
+# 🔥 SIMULATED INGESTION PIPELINE (No Inngest needed)
+@st.cache_data
+def process_pdf_content(uploaded_file) -> tuple[List[str], List[Dict]]:
+    """Simulate Inngest ingestion - extract & chunk PDF locally"""
+    content = uploaded_file.getvalue().decode('latin1', errors='ignore')
+    blocks = re.findall(r'[a-zA-Z]{5,}[a-zA-Z0-9\s\.,:;()]{50,400}', content)
+    
+    chunks, sources = [], []
+    for i, block in enumerate(blocks[:25]):
+        clean_block = re.sub(r'\s+', ' ', block.strip())
+        if len(clean_block) > 40:
+            chunks.append(clean_block)
+            sources.append({"filename": uploaded_file.name, "chunk_id": i+1})
+    
+    return chunks, sources
 
 # 🔥 SESSION STATE
 if "chunks" not in st.session_state:
     st.session_state.chunks = []
 if "sources" not in st.session_state:
     st.session_state.sources = []
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
+# ═══════════════════════════════════════════════════════
+# SECTION 1: PDF INGESTION (Matches Inngest upload style)
+# ═══════════════════════════════════════════════════════
 st.title("📄 PDF RAG Assistant")
 st.markdown("**Upload PDF → Process → Ask Questions**")
 
-# 🔥 UPLOAD & PROCESS (Replaces Inngest)
-uploaded_file = st.file_uploader("Choose PDF", type="pdf")
+col1, col2 = st.columns([2, 1])
+with col1:
+    uploaded = st.file_uploader("Choose a PDF", type=["pdf"], accept_multiple_files=False)
 
-if uploaded_file is not None:
+with col2:
+    st.metric("📄 Status", "Ready" if not uploaded else "Processing")
+
+if uploaded is not None:
     with st.spinner("🔄 Processing PDF (Ingest Pipeline)..."):
-        # Save file
-        uploads_dir = Path("uploads")
-        uploads_dir.mkdir(exist_ok=True)
-        path = uploads_dir / uploaded_file.name
-        path.write_bytes(uploaded_file.getvalue())
-        
-        # Read PDF bytes and extract text
-        content = uploaded_file.getvalue()
-        text = content.decode('latin1', errors='ignore')
-        
-        # Extract meaningful text blocks
-        blocks = re.findall(r'[a-zA-Z]{5,}[a-zA-Z0-9\s\.,:;()]{50,400}', text)
-        
-        # Process chunks
-        st.session_state.chunks = []
-        st.session_state.sources = []
-        
-        for i, block in enumerate(blocks[:25]):
-            clean_block = re.sub(r'\s+', ' ', block.strip())
-            if len(clean_block) > 40:
-                st.session_state.chunks.append(clean_block)
-                st.session_state.sources.append({
-                    "filename": uploaded_file.name,
-                    "chunk_id": i+1
-                })
-        
-        st.success(f"✅ **Ingested {uploaded_file.name}** - {len(st.session_state.chunks)} chunks ready!")
-        
-        # Simulate Inngest completion
-        st.balloons()
-
-# 🔥 STATUS
-if st.session_state.chunks:
-    col1, col2 = st.columns(2)
-    col1.metric("📄 PDF", st.session_state.sources[0]["filename"])
-    col2.metric("🔍 Chunks", len(st.session_state.chunks))
-
-# 🔥 QUERY (Replaces your query event)
-st.markdown("---")
-st.markdown("### ❓ Query Your PDF")
-
-if not st.session_state.chunks:
-    st.warning("👆 **Upload PDF first**")
-else:
-    # Chat-like query
-    question = st.text_input("Ask about your document:")
+        # Simulate async Inngest event
+        st.session_state.chunks, st.session_state.sources = process_pdf_content(uploaded)
+        time.sleep(0.3)  # Visual feedback pause
     
-    if st.button("🔍 Search PDF") and question:
-        with st.spinner("Searching..."):
-            if not st.session_state.chunks:
-                st.error("No chunks available. Upload PDF first.")
-                st.stop()
-            
-        # Simple keyword relevance scoring
+    st.success(f"✅ **Ingested**: {uploaded.name}")
+    st.caption(f"*{len(st.session_state.chunks)} chunks ready*")
+    st.balloons()
+
+# ═══════════════════════════════════════════════════════
+# SECTION 2: QUERY FORM (Exact Inngest-style form)
+# ═══════════════════════════════════════════════════════
+st.divider()
+st.title("❓ Ask a question about your PDF")
+
+if st.session_state.chunks:
+    # 🔥 ASYNC-STYLE QUERY PROCESSING (No Inngest, pure local)
+    async def search_pdf(question: str, top_k: int = 5) -> Dict:
+        """Simulate Inngest query event processing"""
         best_chunks = []
         
         for i, chunk in enumerate(st.session_state.chunks):
             query_words = set(question.lower().split())
             chunk_words = set(chunk.lower().split())
             score = len(query_words.intersection(chunk_words))
-            
             if score > 0:
                 best_chunks.append((chunk, score, i))
         
-        # Handle no matches
-        if not best_chunks:
-            st.warning(f"❌ No relevant content found for '{question}'. Try using keywords from the PDF.")
-            st.stop()
-        
-        # Sort by relevance
         best_chunks.sort(key=lambda x: x[1], reverse=True)
+        top_results = best_chunks[:top_k]
         
-        # Build answer
-        answer = f"**{question}**\n\n"
+        answer_parts = []
         seen_sources = set()
-        
-        for chunk, score, idx in best_chunks[:4]:
+        for chunk, score, idx in top_results:
             source = st.session_state.sources[idx]["filename"]
-            
-            # Only add source once
             if source not in seen_sources:
                 seen_sources.add(source)
             
-            # Extract key sentence
             sentences = re.split(r'[.!?]+', chunk)
             for sent in sentences:
                 sent = sent.strip()
                 if len(sent) > 20:
-                    answer += f"• **{sent.capitalize()}**\n"
+                    answer_parts.append(sent.capitalize())
                     break
         
-        # SAFE source display - no more IndexError
-        sources_list = list(seen_sources)
-        if sources_list:
-            answer += f"\n**Sources**: {', '.join(sources_list[:2])}"
-            if len(sources_list) > 2:
-                answer += f" +{len(sources_list)-2} more"
-        else:
-            answer += "\n**Sources**: Document content"
-        
-        # Display in chat style
-        st.markdown(f"""
-        <div style='background: linear-gradient(135deg, #1e293b, #334155); padding: 24px; border-radius: 16px; border-left: 5px solid #3b82f6; margin: 20px 0;'>
-            <div style='font-size: 1.1rem; line-height: 1.7; color: #e2e8f0;'>
-                {answer.replace('\n', '<br>')}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        return {
+            "answer": " ".join(answer_parts[:3]),
+            "sources": list(seen_sources),
+            "matches": len(top_results)
+        }
 
+    # 🔥 FORM (Exact Inngest replica)
+    with st.form("rag_query_form", clear_on_submit=True):
+        question = st.text_input("Your question", placeholder="e.g. What is the main topic?")
+        top_k = st.number_input("Top chunks", min_value=1, max_value=10, value=4, step=1)
+        col1, col2 = st.columns(2)
+        submitted = col1.form_submit_button("🔍 Ask", use_container_width=True)
+        
+        if col2.form_submit_button("🗑️ Clear", use_container_width=True):
+            st.session_state.chunks = []
+            st.session_state.sources = []
+            st.rerun()
+
+    if submitted and question.strip():
+        with st.spinner("🔄 Generating answer..."):
+            # Simulate Inngest event flow with asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            output = loop.run_until_complete(search_pdf(question.strip(), top_k))
+            loop.close()
+
+        # 🔥 ANSWER DISPLAY (Inngest-style)
+        st.subheader("📝 Answer")
+        if output["answer"]:
+            st.markdown(f"**{question}**")
+            st.write(output["answer"])
+        else:
+            st.warning("No relevant content found. Try different keywords.")
+        
+        if output["sources"]:
+            st.subheader("📚 Sources")
+            for source in output["sources"]:
+                st.caption(f"• {source}")
+        
+        st.caption(f"*Found {output['matches']} matching chunks*")
+        
+else:
+    st.info("👆 **Upload a PDF first** to start querying")
+
+# Footer
+st.markdown("---")
+st.caption("**Production RAG Pipeline** - Powered by Streamlit")
