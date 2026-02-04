@@ -1,9 +1,9 @@
 import streamlit as st
 from pathlib import Path
 import numpy as np
+
 from sklearn.metrics.pairwise import cosine_similarity
 import re
-
 st.set_page_config(page_title="PDF RAG Assistant", page_icon="📄", layout="wide")
 
 # 🔥 SESSION STATE
@@ -103,6 +103,13 @@ else:
                 
                 if source not in seen_sources:
                     seen_sources.add(source)
+
+                # Safe source display
+                if seen_sources:
+                    answer += f"\n**Source**: {list(seen_sources)[0]}"
+                else:
+                    answer += "\n**Source**: No matching sources found"
+
             
             answer += f"\n**Source**: {list(seen_sources)[0]}"
             
