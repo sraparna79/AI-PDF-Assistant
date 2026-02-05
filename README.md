@@ -2,7 +2,7 @@
 
 An intelligent PDF analysis tool powered by AI, designed specifically for working with research papers and academic documents.
 
- **Live Demo**: [pdf-read-ai.streamlit.app](https://ques-and-answers.streamlit.app/)
+ **Live Demo**: [AI Pdf Assist](https://ques-and-answers.streamlit.app/)
 
 ## Overview
 
@@ -143,4 +143,5 @@ For questions, suggestions, or issues, please open an issue on GitHub or contact
 ---
 
 ⭐ If you find this project helpful, please consider giving it a star!
+
 
