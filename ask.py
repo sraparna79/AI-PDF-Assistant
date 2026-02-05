@@ -5,17 +5,24 @@ from pypdf import PdfReader
 st.set_page_config(page_title="AI PDF RAG Assistant", page_icon="📄", layout="wide")
 
 def extract_pdf_content(uploaded_file):
+    """Actual PDF text extraction (Replaces the RegEx method)"""
     reader = PdfReader(uploaded_file)
-    full_text = ""
-    for page in reader.pages:
-        content = page.extract_text()
-        if content:
-            full_text += content + " "
+    chunks = []
     
-    # Split into chunks of ~500 characters for better searching
-    chunk_size = 500
-    chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
-    return [c.strip() for c in chunks if len(c.strip()) > 50]
+    for page in reader.pages:
+        text = page.extract_text()
+        if not text:
+            continue
+            
+        # Split page into smaller semantic chunks (approx 1000 chars)
+        # This gives the search engine more 'targets' to hit
+        page_chunks = [text[i:i+1000] for i in range(0, len(text), 800)]
+        for chunk in page_chunks:
+            clean_chunk = re.sub(r'\s+', ' ', chunk).strip()
+            if len(clean_chunk) > 100:
+                chunks.append(clean_chunk)
+    
+    return chunks
 
 def rag_similarity(question, chunk):
     """Real RAG similarity scoring"""
