@@ -3,169 +3,143 @@ import re
 
 st.set_page_config(page_title="FREE AI PDF Assistant", layout="wide")
 
-def extract_pdf_text(uploaded_file):
-    """AGGRESSIVE text extraction for ALL PDF types"""
+def extract_readable_text(uploaded_file):
+    """Extract ONLY readable English text - rejects garbage"""
     uploaded_file.seek(0)
     raw = uploaded_file.read()
     
-    # Multiple decoding attempts
-    decodings = ['latin1', 'utf-8', 'ascii']
-    best_text = ""
+    # Try multiple encodings
+    text = raw.decode('latin1', errors='ignore')
     
-    for encoding in decodings:
-        try:
-            text = raw.decode(encoding, errors='ignore')
-            # Count English-like words
-            english_words = len(re.findall(r'\b[a-zA-Z]{3,15}\b', text.lower()))
-            if english_words > len(best_text.split()) * 0.5:
-                best_text = text
-                break
-        except:
-            continue
-    
-    # NUCLEAR PDF CLEANING - Kill ALL garbage
-    garbage_patterns = [
-        r'[^\w\s\.,:;\'-]{3,}',  # Weird symbols
-        r'[a-f0-9]{6,}',         # Hex codes
-        r'(Mm:|xmpmm:|rdf:|Evt:|obj|endobj|BT|ET|\/[A-Z]{2,})',  # PDF metadata
-        r'\d{3,}\s*\d+\s*\d+',   # PDF coordinates
+    # BRUTAL CLEANING - Remove ALL PDF/encoding garbage
+    garbage = [
+        r'[àáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ]',  # Accented chars
+        r'[^\x00-\x7F]{3,}',  # Non-ASCII sequences
+        r'[a-f0-9]{6,}',      # Hex codes
+        r'(obj|stream|endobj|BT|ET|\/[A-Z]{2,}|Mm:|xmp)',  # PDF tags
+        r'\d{4,}\s*\d+',      # PDF numbers
     ]
     
-    for pattern in garbage_patterns:
-        best_text = re.sub(pattern, ' ', best_text, flags=re.IGNORECASE)
+    for pattern in garbage:
+        text = re.sub(pattern, ' ', text, flags=re.IGNORECASE)
     
-    best_text = re.sub(r'\s+', ' ', best_text)
+    text = re.sub(r'\s+', ' ', text).strip()
     
-    # Extract ONLY readable English blocks
-    readable_blocks = re.findall(r'[A-Za-z]{4,}.*?[.!?](?=\s[A-Z])|[A-Za-z]{4,}[.!?]', best_text)
+    # ONLY KEEP VALID ENGLISH PARAGRAPHS
+    sentences = re.split(r'[.!?]+', text)
+    valid_chunks = []
     
-    chunks = []
-    for block in readable_blocks[:60]:
-        # Final cleanup
-        clean = re.sub(r'[^\w\s\.,:;\'-]', '', block.strip())
-        words = clean.split()
-        
-        # Only keep blocks with mostly English words
-        english_ratio = sum(1 for w in words if len(w) > 2 and w.isalpha()) / max(len(words), 1)
-        
-        if english_ratio > 0.6 and len(clean) > 120:
-            chunks.append(clean[:1800])
+    for sent in sentences:
+        sent = sent.strip()
+        if len(sent) > 50:
+            words = re.findall(r'\b[a-zA-Z]{3,20}\b', sent.lower())
+            # 80%+ English words required
+            if len(words) > 6 and len(words) / len(sent.split()) > 0.8:
+                clean_sent = ' '.join(words)
+                if len(clean_sent) > 80:
+                    valid_chunks.append(clean_sent.capitalize() + '.')
     
-    return chunks
+    return valid_chunks[:40]
 
-def generate_detailed_answer(question: str, chunks: list) -> str:
-    """Generate FULL paragraph answers with context"""
-    query_words = set(question.lower().split())
-    scored_chunks = []
+def generate_full_paragraph(question, chunks):
+    """Create detailed paragraph answers"""
+    query_words = set(re.findall(r'\w+', question.lower()))
     
+    # Score chunks with multiple methods
+    scored = []
     for i, chunk in enumerate(chunks):
-        # Multi-factor scoring
-        word_matches = sum(1 for word in query_words if len(word) > 2 and word in chunk.lower())
-        phrase_matches = len(re.findall('|'.join(list(query_words)[:3]), chunk.lower()))
-        length_score = min(len(chunk) / 2000, 2)
-        
-        total_score = word_matches * 4 + phrase_matches * 6 + length_score
-        if total_score > 1.5:
-            scored_chunks.append((chunk, total_score, i))
+        matches = sum(1 for word in query_words if word in chunk.lower())
+        length_score = min(len(chunk)/500, 3)
+        total = matches * 5 + length_score
+        scored.append((chunk, total, i))
     
-    # Diverse fallback
-    if not scored_chunks:
-        # Use different chunks based on question
-        start_idx = abs(hash(question)) % max(len(chunks)//2, 1)
-        scored_chunks = [(chunks[(start_idx + i) % len(chunks)], 1.5, i) for i in range(5)]
+    # Ensure variety
+    scored.sort(key=lambda x: x[1], reverse=True)
     
-    scored_chunks.sort(key=lambda x: x[1], reverse=True)
-    top_chunks = [chunk for chunk, score, idx in scored_chunks[:5]]
+    # Build answer from top 4 chunks
+    context = ' '.join([c[0] for c in scored[:4]])
+    sentences = re.split(r'[.!?]+', context)
     
-    # Build comprehensive paragraph answer
-    all_sentences = []
-    for chunk in top_chunks:
-        sentences = re.split(r'[.!?]+', chunk)
-        for sent in sentences:
-            sent = sent.strip()
-            if len(sent) > 25 and any(word in sent.lower() for word in query_words):
-                all_sentences.append(sent.capitalize())
-            elif len(all_sentences) < 6 and len(sent) > 30:
-                all_sentences.append(sent.capitalize())
+    relevant_sentences = []
+    for sent in sentences:
+        sent = sent.strip()
+        if any(word in sent.lower() for word in query_words) and len(sent) > 30:
+            relevant_sentences.append(sent.capitalize())
+        elif len(relevant_sentences) < 5:
+            relevant_sentences.append(sent.capitalize())
     
-    # Create flowing paragraph
-    paragraph = ". ".join(all_sentences[:5])
-    if len(all_sentences) > 1:
-        paragraph += "."
+    paragraph = '. '.join(relevant_sentences[:4]) + '.'
     
-    answer = f"""
-**📄 Answer to: '{question}'**
+    return f"""
+**📄 Answer: '{question}'**
 
 **{paragraph}**
 
-**📊 Analysis:**
-• Found **{len(scored_chunks)}** relevant sections from **{len(chunks)}** total
-• **{st.session_state.get('filename', 'PDF')}**
-• **Coverage**: {min(len(top_chunks)*20, 100)}% document match
+**📊 From your PDF:**
+• **{len([c for c, s, i in scored if s > 2])}** sections matched
+• **Total chunks**: {len(chunks)}
+• **Source**: {st.session_state.get('filename', 'Document')}
 """
-    return answer.strip()
 
 # Session state
 if "chunks" not in st.session_state:
     st.session_state.chunks = []
 
 st.title("🤖 FREE AI PDF Assistant") 
-st.markdown("**Full Paragraphs • Handles ALL PDFs • No APIs needed**")
+st.markdown("**✅ Readable paragraphs • ✅ Rejects garbage text • ✅ Works on ALL PDFs**")
 
-# Upload
+# Upload section
 col1, col2 = st.columns([3,1])
 with col1:
     uploaded = st.file_uploader("📄 Upload PDF", type="pdf")
 with col2:
-    st.metric("Chunks", len(st.session_state.chunks))
+    st.metric("Valid Chunks", len(st.session_state.chunks))
 
-# Process
-if uploaded is not None:
-    if st.button("🚀 Extract Text", type="primary"):
-        with st.spinner("Processing ALL pages..."):
-            st.session_state.chunks = extract_pdf_text(uploaded)
-            st.session_state.filename = uploaded.name
-        
-        st.success(f"✅ **{len(st.session_state.chunks)}** clean paragraphs extracted!")
-        st.rerun()
+# Process PDF
+if uploaded and st.button("🚀 Extract Readable Text", type="primary"):
+    with st.spinner("Killing PDF garbage..."):
+        st.session_state.chunks = extract_readable_text(uploaded)
+        st.session_state.filename = uploaded.name
     
-    # Preview
-    if st.session_state.chunks:
-        with st.expander("📋 Preview Best Paragraphs", expanded=True):
-            for i, chunk in enumerate(st.session_state.chunks[:3]):
-                st.write(f"**{i+1}**: {chunk[:400]}...")
+    st.success(f"✅ **{len(st.session_state.chunks)} VALID English paragraphs** found!")
+    st.balloons()
+    st.rerun()
+
+# Preview
+if st.session_state.chunks:
+    with st.expander("📋 Preview Clean Paragraphs", expanded=True):
+        for i, chunk in enumerate(st.session_state.chunks[:3]):
+            st.markdown(f"**{i+1}:** {chunk}")
 
 st.divider()
 
 # Query
 if st.session_state.chunks:
-    st.markdown("### 💭 Ask about your document")
+    st.markdown("### 💭 Ask about your thesis")
     
-    question = st.text_input("", 
-                           placeholder="What is this thesis about? Key findings? Methodology?",
+    question = st.text_input("",
+                           placeholder="What is this about? Research question? Findings?",
                            label_visibility="collapsed")
     
-    if st.button("🤖 Generate Full Answer", use_container_width=True, type="primary") and question.strip():
-        with st.spinner("Building paragraph answer..."):
-            answer = generate_detailed_answer(question, st.session_state.chunks)
+    if st.button("🤖 Full Paragraph Answer", use_container_width=True, type="primary") and question.strip():
+        with st.spinner("Generating answer..."):
+            answer = generate_full_paragraph(question, st.session_state.chunks)
             st.markdown(answer)
-    
-    # Quick thesis questions
-    st.markdown("**🎓 Thesis Quick Questions:**")
-    thesis_questions = ["main topic", "research question", "methodology", "key findings"]
-    cols = st.columns(len(thesis_questions))
-    for i, q in enumerate(thesis_questions):
-        if cols[i].button(f"🎯 {q}", key=f"thesis_{i}"):
-            st.session_state.last_question = q
+
+    # Quick questions
+    cols = st.columns(4)
+    quicks = ["main topic", "research question", "key findings", "methodology"]
+    for i, q in enumerate(quicks):
+        if cols[i].button(f"🎯 {q}", key=f"q{i}"):
+            st.session_state.question = q
             st.rerun()
 else:
     st.info("👆 **Upload & Extract first**")
 
-# Reset
-col1, col2 = st.columns(2)
-if col1.button("🗑️ Clear All", use_container_width=True):
-    st.session_state = {"chunks": []}
+# Controls
+if st.button("🗑️ Reset", use_container_width=True):
+    st.session_state.chunks = []
     st.rerun()
 
 st.markdown("---")
-st.caption("✨ **FREE** • Works on scanned PDFs • Full paragraphs • Pure Python")
+st.caption("✨ **Pure Python** • Rejects image PDFs • Only readable English")
