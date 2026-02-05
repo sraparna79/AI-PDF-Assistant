@@ -1,31 +1,21 @@
 import streamlit as st
 import re
+from pypdf import PdfReader
 
 st.set_page_config(page_title="AI PDF RAG Assistant", page_icon="📄", layout="wide")
 
 def extract_pdf_content(uploaded_file):
-    """Extract ONLY meaningful content - no metadata"""
-    uploaded_file.seek(0)
-    raw = uploaded_file.read()
-    text = raw.decode('latin1', errors='ignore')
+    reader = PdfReader(uploaded_file)
+    full_text = ""
+    for page in reader.pages:
+        content = page.extract_text()
+        if content:
+            full_text += content + " "
     
-    # Remove ALL PDF/metadata garbage
-    text = re.sub(r'[^\x00-\x7F]{2,}|obj|endobj|stream|BT|ET|Mm:|xmpmm:|rdf:|Evt:', ' ', text)
-    text = re.sub(r'[a-f0-9]{8,}|\d{4,}\s*\d+', ' ', text)
-    text = re.sub(r'\s+', ' ', text)
-    
-    # Extract paragraph-like blocks
-    paragraphs = re.findall(r'[A-Z][a-zA-Z\s\.,:;-]{100,2000}[.!?]', text)
-    
-    chunks = []
-    for para in paragraphs:
-        clean = re.sub(r'[^\w\s\.,:;-]', '', para.strip())
-        words = clean.split()
-        # English content only (70%+ alphabetic words)
-        if len(words) > 10 and sum(w.isalpha() for w in words) / len(words) > 0.7:
-            chunks.append(' '.join(words[:200]))
-    
-    return chunks
+    # Split into chunks of ~500 characters for better searching
+    chunk_size = 500
+    chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
+    return [c.strip() for c in chunks if len(c.strip()) > 50]
 
 def rag_similarity(question, chunk):
     """Real RAG similarity scoring"""
@@ -49,7 +39,7 @@ def generate_rag_response(question, chunks):
     scored_chunks = []
     for i, chunk in enumerate(chunks):
         score = rag_similarity(question, chunk)
-        if score > 0.1:  # Relevance threshold
+        if score > 0.05:  # Relevance threshold
             scored_chunks.append((chunk, score, i))
     
     # Fallback to most detailed chunks
