@@ -128,7 +128,7 @@ This project is open source and available under the [MIT License](LICENSE).
 
 ## Author
 
-**Sraparna**
+**Aparna Sujatha Ramdoss**
 - GitHub: [@sraparna79](https://github.com/sraparna79)
 
 ## Acknowledgments
@@ -143,5 +143,6 @@ For questions, suggestions, or issues, please open an issue on GitHub or contact
 ---
 
 ⭐ If you find this project helpful, please consider giving it a star!
+
 
 
