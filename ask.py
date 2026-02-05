@@ -4,63 +4,77 @@ import re
 st.set_page_config(page_title="FREE AI PDF Assistant", layout="wide")
 
 def extract_pdf_text(uploaded_file):
-    """Extract text from PDF - FIXED for file pointer issue"""
-    # Reset file pointer & read raw bytes
+    """Extract MORE text chunks for better coverage"""
     uploaded_file.seek(0)
     raw = uploaded_file.read()
     raw_text = raw.decode('latin1', errors='ignore')
     
-    # INDUSTRIAL PDF CLEANING
-    # Kill metadata/XML/RDF
-    raw_text = re.sub(r'(Mm:|xmpmm:|rdf:|Evt:|stevt:|dc:|adobe|\/[A-Z]{2,})', ' ', raw_text, flags=re.I)
-    raw_text = re.sub(r'(obj|endobj|xref|stream|BT|ET|\/Length|\/Filter)', ' ', raw_text, flags=re.I)
-    raw_text = re.sub(r'[a-f0-9]{8,}', '', raw_text)
+    # Clean aggressively
+    raw_text = re.sub(r'[a-f0-9]{8,}|Mm:|xmpmm:|rdf:|Evt:|obj|endobj', ' ', raw_text, flags=re.I)
     raw_text = re.sub(r'\s+', ' ', raw_text)
     
-    # Extract REAL text blocks (sentence-like)
-    blocks = re.findall(r'[A-Z][a-zA-Z\s\.,:;\'-]{40,800}[.!?]', raw_text)
+    # Extract LONGER blocks (full paragraphs)
+    blocks = re.findall(r'[A-Za-z]{4,}.*?[.!?](?=\s[A-Z]{1,})|[A-Za-z]{4,}[.!?]', raw_text)
     
     chunks = []
-    for block in blocks[:30]:
+    for block in blocks[:50]:  # MORE chunks
         clean = re.sub(r'[^\w\s\.,:;\'-]', '', block.strip())
-        if len(clean) > 60 and len(clean.split()) > 8:
-            chunks.append(clean[:900])
+        if len(clean) > 100:  # LONGER chunks
+            chunks.append(clean[:1500])  # Much longer
     return chunks
 
-def free_llm(question: str, chunks: list) -> str:
-    """Enhanced RAG with detailed output"""
-    query_words = question.lower().split()
-    relevant_chunks = []
+def generate_paragraph_answer(question: str, chunks: list) -> str:
+    """Generate FULL PARAGRAPH answers with VARIATION"""
     
-    # Score ALL chunks
+    query_words = set(question.lower().split())
+    scored_chunks = []
+    
+    # Advanced scoring - different chunks for different questions
     for i, chunk in enumerate(chunks):
-        score = sum(2 for word in query_words if word.lower() in chunk.lower())
-        score += len(re.findall('|'.join(query_words), chunk.lower()))
-        if score > 0:
-            relevant_chunks.append((chunk, score))
+        # Multiple scoring methods for diversity
+        word_score = sum(1 for word in query_words if word in chunk.lower())
+        phrase_score = len(re.findall('|'.join(query_words), chunk.lower()))
+        length_bonus = len(chunk) / 1000  # Favor longer chunks
+        
+        total_score = word_score * 3 + phrase_score * 5 + length_bonus
+        if total_score > 1:
+            scored_chunks.append((chunk, total_score, i))
     
-    # Fallback to best chunks
-    if not relevant_chunks:
-        relevant_chunks = sorted([(c, len(c)/100) for c in chunks], 
-                               key=lambda x: x[1], reverse=True)[:6]
+    # Fallback: diverse chunks
+    if not scored_chunks:
+        # Rotate chunks based on question hash for variety
+        seed = hash(question) % len(chunks)
+        fallback = [(chunks[(seed + i) % len(chunks)], 1.0, i) for i in range(4)]
+        scored_chunks = fallback
     
-    relevant_chunks.sort(key=lambda x: x[1], reverse=True)
-    top_chunks = [chunk for chunk, score in relevant_chunks[:5]]
+    scored_chunks.sort(key=lambda x: x[1], reverse=True)
+    top_chunks = [chunk for chunk, score, idx in scored_chunks[:4]]
     
-    # Build detailed answer
-    answer_parts = []
-    answer_parts.append(f"**🤖 AI Answer: '{question}'**")
-    answer_parts.append("")
+    # Build FULL PARAGRAPH response
+    answer = f"**📄 Answer to: '{question}'**\n\n"
     
-    answer_parts.append("**📄 From your PDF:**")
-    for i, chunk in enumerate(top_chunks[:4], 1):
-        snippet = chunk[:300] + "..." if len(chunk) > 300 else chunk
-        answer_parts.append(f"{i}. {snippet}")
+    # Combine multiple chunks into coherent paragraph
+    full_context = " ".join(top_chunks)
     
-    answer_parts.append("")
-    answer_parts.append(f"**🔍 Found {len(relevant_chunks)} matches**")
+    # Extract 2-3 full sentences
+    sentences = re.split(r'[.!?]+', full_context)
+    relevant_sentences = []
     
-    return "\n\n".join(answer_parts)
+    for sent in sentences:
+        sent = sent.strip()
+        if len(sent) > 30 and any(word in sent.lower() for word in query_words):
+            relevant_sentences.append(sent.capitalize())
+        elif len(relevant_sentences) < 3 and len(sent) > 40:
+            relevant_sentences.append(sent.capitalize())
+    
+    # Create paragraph
+    paragraph = ". ".join(relevant_sentences[:4]) + "."
+    
+    answer += f"**{paragraph}**\n\n"
+    answer += f"**📊 Found in {len(scored_chunks)} sections** of your PDF\n"
+    answer += f"**📁 Document**: {st.session_state.get('filename', 'PDF')}"
+    
+    return answer
 
 # Session state
 if "chunks" not in st.session_state:
@@ -68,7 +82,7 @@ if "chunks" not in st.session_state:
 
 # UI
 st.title("🤖 FREE AI PDF Assistant") 
-st.markdown("**No API keys • No costs • Works on ANY PDF**")
+st.markdown("**Seeking Answers • Question and Answers • No APIs needed**")
 
 col1, col2 = st.columns([3,1])
 with col1:
@@ -76,68 +90,52 @@ with col1:
 with col2:
     st.metric("Chunks", len(st.session_state.chunks))
 
-# Process PDF (FIXED)
+# Process PDF
 if uploaded is not None:
     if st.button("🚀 Process PDF", type="primary"):
-        with st.spinner("Extracting text..."):
+        with st.spinner("Extracting paragraphs..."):
             st.session_state.chunks = extract_pdf_text(uploaded)
             st.session_state.filename = uploaded.name
         
-        st.success(f"✅ **{len(st.session_state.chunks)} chunks** from {uploaded.name}")
+        st.success(f"✅ **{len(st.session_state.chunks)} paragraphs** extracted!")
         st.balloons()
         st.rerun()
-        
-    # Preview
-    if st.session_state.chunks:
-        with st.expander("📋 Preview content", expanded=True):
-            st.write("**First chunk:**")
-            st.write(st.session_state.chunks[0][:500] + "..." if len(st.session_state.chunks[0]) > 500 else st.session_state.chunks[0])
 
 st.divider()
 
-# Query
+# Query interface
 if st.session_state.chunks:
     st.markdown("### 💭 Ask about your PDF")
     
     col1, col2 = st.columns([4, 1])
     with col1:
-        question = st.text_input("", placeholder="What is AI? Key findings? Main topics?", label_visibility="collapsed")
+        question = st.text_input("", 
+                               placeholder="What is AI? Business impact? Key findings?", 
+                               label_visibility="collapsed")
     with col2:
-        results = st.slider("Results", 3, 8, 5)
+        st.info(f"**{len(st.session_state.chunks)}** chunks ready")
     
-    if st.button("🚀 GENERATE AI ANSWER", use_container_width=True, type="primary") and question.strip():
-        with st.spinner("🤖 Analyzing..."):
-            answer = free_llm(question, st.session_state.chunks)
+    if st.button("🤖 Generate Paragraph Answer", use_container_width=True, type="primary") and question.strip():
+        with st.spinner("Generating full answer..."):
+            answer = generate_paragraph_answer(question, st.session_state.chunks)
             st.markdown(answer)
-            
-            # Quick questions
-            st.markdown("**🔄 Quick Ask:**")
-            quicks = ["main topic", "key findings", "important data", "summary"]
-            cols = st.columns(len(quicks))
-            for i, q in enumerate(quicks):
-                if cols[i].button(f"💡 {q}", key=f"q{i}"):
-                    st.session_state.last_question = q
-                    st.rerun()
+    
+    # Quick questions with variety
+    st.markdown("**🔄 Quick Questions:**")
+    quicks = ["Methodology", "Interesting", "Key challenges", "Main findings"]
+    cols = st.columns(len(quicks))
+    for i, q in enumerate(quicks):
+        if cols[i].button(f"💡 {q}", key=f"quick{i}"):
+            st.session_state.last_q = q
+            st.rerun()
 else:
-    st.info("👆 **Upload & Process PDF first**")
-    st.markdown("**💡 Works best with: research papers, ebooks, reports**")
+    st.info("👆 **Upload & Process first**")
 
-# Controls
-st.markdown("---")
-col1, col2 = st.columns(2)
-if col1.button("🗑️ Clear All", use_container_width=True):
+# Reset
+if st.button("🗑️ Clear All", use_container_width=True):
     st.session_state.chunks = []
     st.session_state.filename = None
     st.rerun()
 
-if col2.button("🔍 Show All Chunks", use_container_width=True):
-    st.session_state.show_chunks = not st.session_state.get("show_chunks", False)
-    st.rerun()
-
-if st.session_state.get("show_chunks", False):
-    with st.expander(f"📚 All {len(st.session_state.chunks)} chunks"):
-        for i, chunk in enumerate(st.session_state.chunks[:10]):
-            st.caption(f"**{i+1}**: {chunk[:200]}...")
-
 st.markdown("---")
-st.caption("✨ **100% FREE** - Pure Python RAG • No external APIs")
+st.caption("✨ **FREE** - Full paragraphs • question & answers • Try it")
