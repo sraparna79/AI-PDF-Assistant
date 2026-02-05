@@ -2,7 +2,7 @@ import streamlit as st
 import re
 from pypdf import PdfReader
 
-st.set_page_config(page_title="AI PDF RAG Assistant", page_icon="📄", layout="wide")
+st.set_page_config(page_title="AI PDF Assistant", page_icon="📄", layout="wide")
 
 def extract_pdf_content(uploaded_file):
     """Actual PDF text extraction (Replaces the RegEx method)"""
@@ -91,23 +91,23 @@ def generate_rag_response(question, chunks):
 if "chunks" not in st.session_state:
     st.session_state.chunks = []
 
-st.title("🤖 AI PDF RAG Assistant")
-st.markdown("**Real RAG • Semantic similarity • No preview clutter • Full paragraphs**")
+st.title("🤖 AI PDF Assistant")
+st.markdown("**Precise AI • Semantic similarity • No preview clutter**")
 
 # Upload & Process
 col1, col2 = st.columns([3, 1])
 with col1:
     uploaded_file = st.file_uploader("📤 Upload PDF", type="pdf")
 with col2:
-    st.metric("📚 RAG Index", len(st.session_state.chunks))
+    st.metric("📚Index", len(st.session_state.chunks))
 
 if uploaded_file is not None:
-    if st.button("🔍 Build RAG Index", type="primary", use_container_width=True):
-        with st.spinner("Building vector index..."):
+    if st.button("🔍 Build Answer", type="primary", use_container_width=True):
+        with st.spinner("Searching Answer..."):
             st.session_state.chunks = extract_pdf_content(uploaded_file)
             st.session_state.filename = uploaded_file.name
         
-        st.success(f"✅ **RAG Index Ready** - {len(st.session_state.chunks)} chunks indexed!")
+        st.success(f"✅ **Answer** - {len(st.session_state.chunks)} Marked!")
         st.balloons()
 
 # RAG Query
@@ -119,8 +119,8 @@ if st.session_state.chunks:
                            placeholder="What is AI? Business impact? Key findings?",
                            label_visibility="collapsed")
     
-    if st.button("🔍 **RAG SEARCH**", type="primary", use_container_width=True) and question.strip():
-        with st.spinner("Performing RAG retrieval..."):
+    if st.button("🔍 **SEARCH**", type="primary", use_container_width=True) and question.strip():
+        with st.spinner("Performing retrieval..."):
             answer_html = generate_rag_response(question, st.session_state.chunks)
             st.markdown(answer_html, unsafe_allow_html=True)
     
@@ -133,13 +133,13 @@ if st.session_state.chunks:
             st.session_state.last_query = q
             st.rerun()
 else:
-    st.info("👆 **Upload PDF → Build RAG Index → Ask questions**")
+    st.info("👆 **Upload PDF → Build Index → Ask questions**")
     st.markdown("*Works best with text-based PDFs (not scanned images)*")
 
 # Clean UI - No preview clutter
 st.markdown("---")
 col1, col2 = st.columns(2)
-if col1.button("🗑️ Clear RAG Index", use_container_width=True):
+if col1.button("🗑️ Clear Answer", use_container_width=True):
     st.session_state.chunks = []
     st.session_state.filename = None
     st.rerun()
